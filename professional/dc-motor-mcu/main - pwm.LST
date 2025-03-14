@@ -1,0 +1,353 @@
+C51 COMPILER V9.01   MAIN___PWM                                                            12/27/2024 09:59:31 PAGE 1   
+
+
+C51 COMPILER V9.01, COMPILATION OF MODULE MAIN___PWM
+OBJECT MODULE PLACED IN main - pwm.OBJ
+COMPILER INVOKED BY: D:\Study\51&32&arduino\51\C51\BIN\C51.EXE main - pwm.c BROWSE DEBUG OBJECTEXTEND
+
+line level    source
+
+   1          #include <reg52.h>
+   2          typedef unsigned char uchar;
+   3          //ADC部分定义------------------------------------------
+   4          sbit START=P3^0;  //START为0时开始转换
+   5          sbit EOC=P3^1; //为1 时表明数据转换完成
+   6          sbit OE=P3^7;  //为1时读可以取数据
+   7          
+   8          #define ADC0809_Data P0//定义端口接收ADC0809数据转换结果
+   9          
+  10          //数码管显示部分--------------------------------------- 
+  11          sbit DIN=P1^0;          //MAX7219串行数据       1脚
+  12          sbit LOAD=P1^1;          //MAX7219片选           12脚
+  13          sbit CLK=P1^2;           //MAX7219串行时钟        13脚
+  14          
+  15          //寄存器宏定义
+  16           
+  17          #define DECODE_MODE  0x09   //译码控制寄存器
+  18           
+  19          #define INTENSITY    0x0A   //亮度控制寄存器
+  20           
+  21          #define SCAN_LIMIT   0x0B   //扫描界限寄存器
+  22           
+  23          #define SHUT_DOWN    0x0C   //关断模式寄存器
+  24           
+  25          #define DISPLAY_TEST 0x0F   //测试控制寄存器 
+  26          #define PWM_PERIOD 254  //定义PWM周期
+  27          
+  28          
+  29           //     电机正反转-----------------------------------------
+  30          sbit shun = P3^5;
+  31          sbit ni = P3^6;
+  32          sbit shun_control = P1^6;
+  33          sbit ni_control = P1^7;                 //初始为高电平
+  34          sbit fast = P3^2;
+  35          sbit slow = P3^3;
+  36          uchar speed1 = 0;       //滑动变阻器控制速度
+  37          uchar speed2 = 0;       //按键控制速度
+  38          uchar speed = 0;        //电机控制总速度
+  39          
+  40          uchar counter;            //计数值作占空比
+  41          uchar direction;         //电机转向变量 0：顺时针 1：逆时针
+  42          
+  43          //led buzzer报警显示功能------------------------------------
+  44          sbit led = P1^4;
+  45          sbit buzzer = P1^3;
+  46          uchar  alam = 0;
+  47          
+  48          //函数声明--------------------------------------------------
+  49          void Timer0_Init();
+  50          //数码管显示函数函数声明
+  51           
+  52          void Write7219(unsigned char address,unsigned char dat);
+  53          void Initial(void);
+  54          
+  55          
+C51 COMPILER V9.01   MAIN___PWM                                                            12/27/2024 09:59:31 PAGE 2   
+
+  56          //延时函数---------------------------------------------------
+  57          
+  58          void delay_ms(uchar ms)
+  59          {
+  60   1              uchar i,j;
+  61   1              for(i=ms;i>0;i--)
+  62   1              for(j=110;j>0;j--);
+  63   1      }
+  64          
+  65          
+  66          //adc转换返回函数------------------------------------------
+  67          uchar ADC0809_Read()
+  68          {
+  69   1              uchar Temp=0X00;
+  70   1              OE=0;//输出设为高阻态
+  71   1              START=0;
+  72   1              START=1;//提供上升沿启动AD转换
+  73   1              START=0;//提供下降沿
+  74   1              while(!EOC);//等待转换结束
+  75   1              OE=1;//连接数据线输出
+  76   1              Temp=ADC0809_Data;
+  77   1              OE=0;//断开数据线
+  78   1              return Temp;//返回结果
+  79   1      }
+  80          
+  81          
+  82          //返回最终速度函数--------------------------------------------------
+  83          uchar Final_Speed(uchar x1, uchar x2)
+  84          {
+  85   1              uchar value = (x1 + x2);
+  86   1              return value;
+  87   1      }
+  88          
+  89          
+  90          
+  91          //显示速度转向函数---------------------------------------------------
+  92          void toShow(number)
+  93          {
+  94   1              uchar hundreds =number/100;
+  95   1              uchar tens = (number/10)%10;
+  96   1              uchar units = number%10;
+  97   1              Write7219(2,hundreds) ;
+  98   1              Write7219(3,tens) ;
+  99   1              Write7219(4,units) ;
+ 100   1              Write7219(1,direction) ;
+ 101   1      
+ 102   1      
+ 103   1      }
+ 104          
+ 105          //数码管显示函数函数定义  地址、数据发送子程序---------------------
+ 106          void Write7219(uchar address,uchar dat)
+ 107          {   
+ 108   1          uchar i;
+ 109   1          LOAD=0;    //拉低片选线，选中器件
+ 110   1       
+ 111   1          //发送地址 
+ 112   1          for (i=0;i<8;i++)        //移位循环8次              
+ 113   1          {  
+ 114   2             CLK=0;        //清零时钟总线 
+ 115   2             DIN=(bit)(address&0x80); //每次取高字节      
+ 116   2             address<<=1;             //左移一位 
+ 117   2             CLK=1;        //时钟上升沿，发送地址
+C51 COMPILER V9.01   MAIN___PWM                                                            12/27/2024 09:59:31 PAGE 3   
+
+ 118   2          }
+ 119   1       
+ 120   1          //发送数据 
+ 121   1          for (i=0;i<8;i++)               
+ 122   1          {   
+ 123   2             CLK=0;
+ 124   2             DIN=(bit)(dat&0x80);    
+ 125   2             dat<<=1;  
+ 126   2             CLK=1;        //时钟上升沿，发送数据
+ 127   2          }
+ 128   1           LOAD=1;    //发送结束，上升沿锁存数据                      
+ 129   1      }
+ 130          
+ 131          //电机控制函数-----------------------------------------------------------
+ 132          void motor_control(uchar speedx)
+ 133          {
+ 134   1              if      (ni_control == 1 && shun_control == 0)
+ 135   1              {
+ 136   2                       direction = 0;          //表示电机正转即顺时针
+ 137   2              }
+ 138   1              else if(shun_control == 1 && ni_control == 0 )  
+ 139   1              {
+ 140   2                       direction = 1;         //表示电机反转即逆时针
+ 141   2              }
+ 142   1              else
+ 143   1              {
+ 144   2                      direction = 9;          //无效位
+ 145   2              }
+ 146   1      
+ 147   1              switch(direction)
+ 148   1              {
+ 149   2                      case 0:                 //控制顺时针转速
+ 150   2                              {                 
+ 151   3                                        if (counter < speedx )
+ 152   3                                        {
+ 153   4                                                      shun = 1;
+ 154   4                                                      ni = 0;
+ 155   4                                        }
+ 156   3                                        else
+ 157   3                                        {
+ 158   4                                                      shun = 0;
+ 159   4                                                      ni = 0;
+ 160   4                                        }
+ 161   3                              }
+ 162   2                              break;
+ 163   2                      case 1:                                  //控制逆时针转速
+ 164   2                               {
+ 165   3                                        if (counter < speedx )
+ 166   3                                        {
+ 167   4                                                      shun = 0;
+ 168   4                                                      ni = 1;
+ 169   4                                        }
+ 170   3                                        else
+ 171   3                                        {
+ 172   4                                                      shun = 0;
+ 173   4                                                      ni = 0;
+ 174   4                                        }
+ 175   3                               }
+ 176   2                               break; 
+ 177   2                      case 9:                                  //无效开关，使其停止
+ 178   2                               {
+ 179   3                                                      shun = 0;
+C51 COMPILER V9.01   MAIN___PWM                                                            12/27/2024 09:59:31 PAGE 4   
+
+ 180   3                                                      ni = 0;                           
+ 181   3                               }
+ 182   2                               break;           
+ 183   2              }
+ 184   1      
+ 185   1      }
+ 186          
+ 187          void Alaming()          //高速运行报警功能-----------------
+ 188          {
+ 189   1              if (speed >= 245 && speed < 252)          //高速运行警示
+ 190   1              {
+ 191   2                      led = 1;                //led点亮 常亮
+ 192   2                      buzzer = 1;
+ 193   2              }
+ 194   1              else if(speed >= 252)
+ 195   1              {
+ 196   2                      led = 1;
+ 197   2                      delay_ms(10); //闪烁报警
+ 198   2                      led = 0;
+ 199   2                      buzzer = 0;
+ 200   2                      alam ++;                
+ 201   2              }
+ 202   1              else
+ 203   1              {alam = 0;
+ 204   2               led = 0;
+ 205   2               buzzer = 1;
+ 206   2              }
+ 207   1              if (alam > 100)
+ 208   1                 {
+ 209   2                        speed = 0;
+ 210   2                        shun = 1;
+ 211   2                        ni = 1;
+ 212   2                        shun_control = 0;
+ 213   2                        ni_control = 0;
+ 214   2                 }
+ 215   1      }
+ 216          
+ 217          //初始化函数-----------------------------------------------------------
+ 218          void interrurput_init()         //初始化外部中断
+ 219          {
+ 220   1              EA = 1;
+ 221   1          EX0 = 1;
+ 222   1          IT0 = 1;
+ 223   1              EX1 = 1;
+ 224   1              IT1 = 1;
+ 225   1              PX1 = 1;
+ 226   1              PX0 = 1;
+ 227   1      
+ 228   1      }
+ 229          
+ 230          
+ 231          void Timer0_Init()         //初始化定时器0
+ 232          {
+ 233   1              TMOD = 0X01;
+ 234   1              TH0 =0xff;      //12mhz晶振定时1ms
+ 235   1              TL0 =0xfc;
+ 236   1              ET0 = 1;
+ 237   1              TR0 = 1;
+ 238   1      }
+ 239          
+ 240          //MAX7219初始化，设置MAX7219内部的控制寄存器
+ 241          void Initial(void)            
+C51 COMPILER V9.01   MAIN___PWM                                                            12/27/2024 09:59:31 PAGE 5   
+
+ 242           
+ 243          {
+ 244   1       
+ 245   1          Write7219(SHUT_DOWN,0x01);         //开启正常工作模式（0xX1）
+ 246   1       
+ 247   1          Write7219(DISPLAY_TEST,0x00);      //选择工作模式（0xX0）
+ 248   1       
+ 249   1          Write7219(DECODE_MODE,0xff);       //选用全译码模式
+ 250   1       
+ 251   1          Write7219(SCAN_LIMIT,0x03);        //3只LED全用
+ 252   1       
+ 253   1          Write7219(INTENSITY,0x04);          //设置初始亮度     
+ 254   1       
+ 255   1      }
+ 256          //^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 257          
+ 258          
+ 259          
+ 260          
+ 261          //主程序----------------------------------------------------------
+ 262          int main()
+ 263          {       
+ 264   1              /* 初始化中断 */
+ 265   1              interrurput_init();
+ 266   1              Timer0_Init();          //初始化定时器0
+ 267   1              Initial();      //初始化数码管
+ 268   1      
+ 269   1      
+ 270   1      
+ 271   1          /* 将速度变量从P2口输出,通过DAC0832转换成模拟电压 */
+ 272   1          while(1)
+ 273   1          {   
+ 274   2                                      
+ 275   2                       speed1 = ADC0809_Read()/2;
+ 276   2                       speed =  Final_Speed(speed1,speed2);
+ 277   2                       motor_control(speed);
+ 278   2                       Alaming();
+ 279   2                       toShow(speed);
+ 280   2                                     
+ 281   2          }
+ 282   1      }
+ 283          
+ 284          
+ 285          //中断函数区--------------------------------------------------------------
+ 286          //按键加减速函数--------------------
+ 287          void FAST()interrupt 0
+ 288          {       
+ 289   1              if      (direction != 9)   //开关有效才能加减
+ 290   1                      {
+ 291   2                              if (speed2 != 128) //speed最大速度限制在255
+ 292   2                              speed2 += 8;
+ 293   2                      }               
+ 294   1      }
+ 295          
+ 296          
+ 297          void SLOW()interrupt 2
+ 298          {       
+ 299   1              
+ 300   1                      if (speed2 != 0) //speed最大速度限制在128
+ 301   1              speed2 -= 2;                                       
+ 302   1      }
+ 303          
+C51 COMPILER V9.01   MAIN___PWM                                                            12/27/2024 09:59:31 PAGE 6   
+
+ 304          
+ 305          
+ 306          void Timer0_ISR()interrupt 1
+ 307          {
+ 308   1                 TR0=0;               //赋初值时，关闭定时器
+ 309   1             TH0=0xff;        //(65536-5)/256;//赋初值定时
+ 310   1             TL0=0xfb;        //(65536-5)%256;//0.01ms
+ 311   1                 counter++;
+ 312   1      
+ 313   1              if (counter >= PWM_PERIOD) //一个控制周期完更新
+ 314   1              {
+ 315   2                      counter = 0;
+ 316   2              }
+ 317   1              TR0 = 1;
+ 318   1      }
+ 319          
+ 320          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    462    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      6       3
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
